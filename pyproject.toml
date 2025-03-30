@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocralign"
+version = "0.1.0"
+description = "OCR while preserving document formatting and layout"
+authors = [{ name = "Hasham Ul Haq", email = "haashaamulhaq@gmail.com" }]
+readme = "README.md"
+license = { file = "LICENSE" }
+dependencies = [
+    "pdf2image",
+    "pytesseract",
+    "numpy",
+    "beautifulsoup4",
+    "tqdm"
+]
+requires-python = ">=3.7"

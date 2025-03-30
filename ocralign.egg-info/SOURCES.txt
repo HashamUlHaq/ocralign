@@ -1,0 +1,11 @@
+LICENSE
+README.md
+pyproject.toml
+ocralign/__init__.py
+ocralign/ocr.py
+ocralign/tess_align.py
+ocralign.egg-info/PKG-INFO
+ocralign.egg-info/SOURCES.txt
+ocralign.egg-info/dependency_links.txt
+ocralign.egg-info/requires.txt
+ocralign.egg-info/top_level.txt
