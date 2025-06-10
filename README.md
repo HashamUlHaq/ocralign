@@ -11,6 +11,7 @@ Before installing the Python package, you need to install some system dependenci
 ```bash
 sudo apt update
 sudo apt install -y tesseract-ocr
+sudo apt install -y poppler-utils
 ```
 
 ## Installation
