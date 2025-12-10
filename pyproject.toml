@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ocralign"
-version = "0.1.0"
+version = "0.1.1"
 description = "OCR while preserving document formatting and layout"
 authors = [{ name = "Hasham Ul Haq", email = "haashaamulhaq@gmail.com" }]
 readme = "README.md"
 license = { file = "LICENSE" }
 dependencies = [
-    "pdf2image",
+    "PyMuPDF",
     "pytesseract",
     "numpy",
     "beautifulsoup4",

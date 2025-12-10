@@ -1,4 +1,4 @@
-pdf2image
+PyMuPDF
 pytesseract
 numpy
 beautifulsoup4
