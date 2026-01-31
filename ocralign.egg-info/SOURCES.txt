@@ -2,6 +2,7 @@ LICENSE
 README.md
 pyproject.toml
 ocralign/__init__.py
+ocralign/digital_pdf_align.py
 ocralign/ocr.py
 ocralign/tess_align.py
 ocralign.egg-info/PKG-INFO

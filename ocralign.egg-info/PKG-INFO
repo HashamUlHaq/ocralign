@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: ocralign
-Version: 0.1.1
+Version: 0.1.2
 Summary: OCR while preserving document formatting and layout
 Author-email: Hasham Ul Haq <haashaamulhaq@gmail.com>
 License:                                  Apache License
