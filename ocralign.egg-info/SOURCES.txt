@@ -5,6 +5,7 @@ ocralign/__init__.py
 ocralign/digital_pdf_align.py
 ocralign/ocr.py
 ocralign/tess_align.py
+ocralign/tess_align_normalized.py
 ocralign.egg-info/PKG-INFO
 ocralign.egg-info/SOURCES.txt
 ocralign.egg-info/dependency_links.txt

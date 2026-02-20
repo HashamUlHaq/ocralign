@@ -27,7 +27,9 @@ print(process_image("./sample.png"))
 # OCR a multi-page PDF (returns list of text per page)
 texts = process_pdf("./images-pdf.pdf", 
                     type ="image", # if the PDF is scanned. Else: "digital"
-                    enforce_layout = True, # This only applies to digital PDFs. "image" pdf type will always have formatted output.
+                    layout = "normalized", # Available options: "normalized", "absolute", "none".
+                    # For digital PDFs - "normalized" or "absolute" would produce formatted output. "none" will produce unformatted output.
+                    # For PDFs wit images - "normalized": formatted output without absolute vertical line positioning. "absolute": formatted output with absolute vertical lines. "none": not supported.
                     add_marker = True, # Add page boundary in the output
                     dpi=300)
 

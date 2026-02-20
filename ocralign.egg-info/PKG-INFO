@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: ocralign
-Version: 0.1.2
+Version: 0.1.3
 Summary: OCR while preserving document formatting and layout
 Author-email: Hasham Ul Haq <haashaamulhaq@gmail.com>
 License:                                  Apache License
@@ -242,7 +242,13 @@ from ocralign import process_pdf, process_image
 print(process_image("./sample.png"))
 
 # OCR a multi-page PDF (returns list of text per page)
-texts = process_pdf("./images-pdf.pdf", dpi=300)
+texts = process_pdf("./images-pdf.pdf", 
+                    type ="image", # if the PDF is scanned. Else: "digital"
+                    layout = "normalized", # Available options: "normalized", "absolute", "none".
+                    # For digital PDFs - "normalized" or "absolute" would produce formatted output. "none" will produce unformatted output.
+                    # For PDFs wit images - "normalized": formatted output without absolute vertical line positioning. "absolute": formatted output with absolute vertical lines. "none": not supported.
+                    add_marker = True, # Add page boundary in the output
+                    dpi=300)
 
 # OCR a PDF and write result to a file
 process_pdf("./images-pdf.pdf", dpi=300, output_path="test.txt")

@@ -6,6 +6,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from ocralign.tess_align import process_page
+from ocralign.tess_align_normalized import process_page as process_page_normalized
 from ocralign.digital_pdf_align import page_to_layout_text
 
 logging.basicConfig(
@@ -42,6 +43,7 @@ def _page_to_pil_image(page: "fitz.Page", dpi: int) -> Image.Image:
 
 def process_image_pdf(
     pdf_path: str,
+    layout: str = "normalized",
     add_marker: bool=True,
     dpi: int = 300,
     output_path: Optional[str] = None,
@@ -61,7 +63,12 @@ def process_image_pdf(
             logger.debug(f"Processing page {page_index + 1}")
             page = doc.load_page(page_index)
             image = _page_to_pil_image(page, dpi=dpi)
-            text = process_page(image)
+            if layout == "normalized":
+                text = "\n" + process_page_normalized(image)
+            elif layout == "absolute":
+                text = process_page(image)
+            else:
+                raise ValueError(f"Invalid layout: {layout}. Valid layouts for image PDFs are: normalized, absolute")
             text_pages.append(text)
             logger.debug(f"Extracted text from page {page_index + 1}")
 
@@ -81,7 +88,7 @@ def process_image_pdf(
         if doc is not None:
             doc.close()
 
-def process_digital_pdf(pdf_path: str, enforce_layout: bool, add_marker: bool, output_path: Optional[str] = None) -> Optional[List[str]]:
+def process_digital_pdf(pdf_path: str, layout: str, add_marker: bool, output_path: Optional[str] = None) -> Optional[List[str]]:
     doc = None
     try:
         logger.info(f"Starting PDF processing for: {pdf_path}")
@@ -92,7 +99,7 @@ def process_digital_pdf(pdf_path: str, enforce_layout: bool, add_marker: bool, o
         text_pages: List[str] = []
         for i in range(doc.page_count):
             page = doc.load_page(i)
-            if enforce_layout: 
+            if layout in ['normalized', 'absolute']: 
                 text_pages.append(page_to_layout_text(page, cols=140))
             else:
                 text_pages.append(page.get_text())
@@ -116,7 +123,7 @@ def process_digital_pdf(pdf_path: str, enforce_layout: bool, add_marker: bool, o
 def process_pdf(
     pdf_path: str,
     type: str="image",
-    enforce_layout: bool = True,
+    layout: str = "normalized",
     add_marker: bool = True,
     dpi: int = 300,
     output_path: Optional[str] = None,
@@ -130,6 +137,8 @@ def process_pdf(
     Args:
         pdf_path (str): Path to the input PDF file.
         type (str): "image" for scanned or "digital" for pdfs with retrievable text.
+        layout (str): "normalized" for normalized layout, "absolute" to get the absolute layout, "none" to get the raw text.
+        add_marker (bool): Add page boundary in the output
         dpi (int): Dots per inch for image rendering. Higher DPI gives better OCR results.
         output_path (str, optional): If provided, writes concatenated text to this file
                                      instead of returning the list of page texts.
@@ -138,11 +147,13 @@ def process_pdf(
         Optional[List[str]]: A list of strings where each string contains the OCR-extracted
                              text from one page. Returns None if output_path is provided.
     """
+    if layout not in ["normalized", "absolute", "none"]:
+        raise ValueError("Invalid layout. Valid layouts are: normalized, absolute, none")
     
     if type == "image":
-        return process_image_pdf(pdf_path, add_marker, dpi, output_path)
+        return process_image_pdf(pdf_path, layout, add_marker, dpi, output_path)
     elif type == "digital":
-        return process_digital_pdf(pdf_path, enforce_layout, add_marker, output_path)
+        return process_digital_pdf(pdf_path, layout, add_marker, output_path)
     else:
         raise Exception ('Invalid document type. Only "digital" or "image" is allowed')
 
