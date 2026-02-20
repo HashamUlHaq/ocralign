@@ -25,7 +25,11 @@ from ocralign import process_pdf, process_image
 print(process_image("./sample.png"))
 
 # OCR a multi-page PDF (returns list of text per page)
-texts = process_pdf("./images-pdf.pdf", dpi=300)
+texts = process_pdf("./images-pdf.pdf", 
+                    type ="image", # if the PDF is scanned. Else: "digital"
+                    enforce_layout = True, # This only applies to digital PDFs. "image" pdf type will always have formatted output.
+                    add_marker = True, # Add page boundary in the output
+                    dpi=300)
 
 # OCR a PDF and write result to a file
 process_pdf("./images-pdf.pdf", dpi=300, output_path="test.txt")
