@@ -38,7 +38,7 @@ t0 = time.time()
 doc = process_pdf(
     PDF,
     backend="docling",
-    ocr_engine="tesseract",  # or "rapidocr"
+    ocr_engine="rapidocr",  # or "rapidocr"
     device="cpu",            # "cuda" on a GPU box
 )
 elapsed = time.time() - t0

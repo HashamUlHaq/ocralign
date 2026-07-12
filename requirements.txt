@@ -1,0 +1,25 @@
+# ocralign — full install (vanilla + docling backends).
+# Versions pinned to what was tested on the feature/docling-backend branch.
+#
+# CPU-only box:  pip install torch --index-url https://download.pytorch.org/whl/cpu
+#                BEFORE this file, then swap onnxruntime-gpu for onnxruntime below.
+#                (saves ~4 GB: the default Linux torch wheel bundles the CUDA stack)
+# GPU box:       install as-is. onnxruntime-gpu needs CUDA 12.x at runtime;
+#                the default torch wheel already ships the CUDA libraries.
+#
+# System requirement (both backends): tesseract binary
+#   sudo apt install -y tesseract-ocr
+
+# --- base (vanilla backend) ---
+PyMuPDF==1.28.0
+pytesseract==0.3.13
+Pillow==12.3.0
+tqdm==4.68.4
+
+# --- docling backend ---
+docling==2.112.0
+rapidocr==3.9.1
+
+# ONNX Runtime: exactly ONE of the two, never both.
+onnxruntime-gpu==1.27.0          # GPU (CUDA) — for device="cuda"
+# onnxruntime==1.27.0            # CPU-only alternative
