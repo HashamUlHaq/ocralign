@@ -1,91 +1,98 @@
 # 🧾 ocralign
 
-`ocralign` is an OCR utility built on top of Tesseract that preserves the layout and formatting of scanned documents. It supports both PDFs and images and outputs clean, structured text.
+`ocralign` extracts layout-preserving text from PDFs and images **plus a word-level coordinate mapping**, so any character span in the extracted text (e.g. an NER entity) can be resolved back to bounding boxes on the original page — for drawing highlight overlays in a PDF viewer, PIL/cv2, or anything else.
+
+The core is engine-agnostic: OCR engines plug in as adapters that emit one canonical schema, and all layout/locate logic runs on that schema. Tesseract (scanned PDFs/images) and PyMuPDF (born-digital PDFs) adapters are built in.
 
 ---
 
 ## 🔧 System Requirements
 
-Before installing the Python package, you need to install some system dependencies required by `pytesseract` and `pdf2image`:
-
 ```bash
 sudo apt update
 sudo apt install -y tesseract-ocr
-sudo apt install -y poppler-utils
 ```
 
 ## Installation
 ```pip install ocralign```
 
-## Usage example
+## Usage
+
+```python
+from ocralign import process_pdf, process_image, locate, locate_substring, to_pixels
+
+# Process a PDF -> Document (pages with formatted text + word mapping)
+doc = process_pdf(
+    "./scan.pdf",
+    type="image",        # "image" for scanned PDFs (OCR), "digital" for PDFs with a text layer
+    layout="normalized", # "normalized" (readable), "absolute" (proportional vertical gaps), "none" (plain)
+    dpi=300,
+)
+
+page = doc.pages[0]
+print(page.text)                 # layout-aligned text, same formatting as before
+print(page.words[0])             # Word(text='Sample', bbox=(0.014, 0.02, ...), confidence=96.1,
+                                 #      line_no=0, char_start=18, char_end=24)
+
+# OCR a single image -> Page
+page = process_image("./sample.png")
 ```
-from ocralign import process_pdf, process_image
 
-# OCR a single image
-print(process_image("./sample.png"))
+### Coordinate mapping & overlays
 
-# OCR a multi-page PDF (returns list of text per page)
-texts = process_pdf("./images-pdf.pdf", 
-                    type ="image", # if the PDF is scanned. Else: "digital"
-                    layout = "normalized", # Available options: "normalized", "absolute", "none".
-                    # For digital PDFs - "normalized" or "absolute" would produce formatted output. "none" will produce unformatted output.
-                    # For PDFs wit images - "normalized": formatted output without absolute vertical line positioning. "absolute": formatted output with absolute vertical lines. "none": not supported.
-                    add_marker = True, # Add page boundary in the output
-                    dpi=300)
+Bounding boxes are `(x0, y0, x1, y1)` as **fractions of page width/height (0–1, origin top-left)** — independent of OCR DPI and of whatever size the page is later rendered at.
 
-# OCR a PDF and write result to a file
-process_pdf("./images-pdf.pdf", dpi=300, output_path="test.txt")
+```python
+# NER gives you a character span into page.text -> resolve to boxes.
+# One box per visual line; spans that wrap lines return multiple boxes.
+boxes = locate(page, char_start=120, char_end=134)
+
+# Or search by substring (whitespace-flexible; layout spacing won't break matching)
+occurrences = locate_substring(page, "Margaret Chen")
+
+# Offsets into the full multi-page text (doc.text(add_marker=True))?
+from ocralign import locate_in_document
+page_boxes = locate_in_document(doc, start, end)   # -> [(page_number, bbox), ...]
+
+# Convert to pixels for ANY render size (PIL, cv2, react-pdf, ...)
+x0, y0, x1, y1 = to_pixels(boxes[0], rendered_width, rendered_height)
 ```
-### Input image:
+
+Frontend (e.g. react-pdf) needs no library at all — store the normalized boxes with your entities and draw an absolutely-positioned div at `left = x0 * renderedPageWidth`, etc.
+
+### Persistence
+
+```python
+doc.save_json("doc.json")        # full schema: text + words + offsets, JSON round-trip
+doc = Document.load_json("doc.json")
+full_text = doc.text(add_marker=True)   # concatenated text with page markers
+```
+
+## Adding a new OCR engine
+
+Write one adapter function that converts the engine's native output into `List[Word]` (normalized bboxes) — see `ocralign/adapters/tesseract.py` (~60 lines). Layout rendering, offset mapping and `locate()` work unchanged on top of it. Commercial APIs (Textract, Document AI, Azure) already return word+bbox+confidence, so their adapters are thin translations.
+
+## Schema
+
+```json
+{
+  "schema_version": "1.0",
+  "pages": [
+    {
+      "page_number": 1,
+      "width_px": 2550, "height_px": 3300,
+      "text": "formatted layout text ...",
+      "words": [
+        {"text": "Margaret", "bbox": [0.12, 0.08, 0.22, 0.10],
+         "confidence": 96.4, "line_no": 3, "char_start": 118, "char_end": 126}
+      ]
+    }
+  ]
+}
+```
+
+### Example input & overlay resolved via `locate_substring`:
 
 ![Sample OCR Input](./examples/sample.png)
 
-### Extracted Text [📎 See full output here](./examples/output.txt)
-
-```
-Sample Tables                                                                                = Print
-
- Tables used in papers can be so simple that they are "informal" enough to be a sentence member and not
- require a caption, or they can be complex enough that they require spreadsheets spanning several pages.
- A table’s fundamental purpose should always be to visually simplify complex material, in particular when
- the table is designed to help the reader identify trends. Here, a simple table and a complex table are used
- to demonstrate how tables help writers to record and "visualize" information and data.
-
-
- Simple Table
-
- The simple table that follows, from a student's progress report to his advisor, represents how tables need
- not always be about data presentation. Here the rows and columns simply make it easy for the writer to
- present the necessary information with efficiency. This unnumbered and informal table, in effect, explains
- itself.
-
-
-
-
-                     Plan for Weekly Progress for the Remainder of the Semester
-
-      Week of     Contact Dr. Berinni for relevant literature suggestions.
-      11/28       Read lit reviews from Vibrational Spectroscopy.
-                  Research experimental methods used to test polyurethanes, including infrared (IR)
-                  spectroscopy and nuclear magnetic resonance (NMR).
-
-      Week of     Define specific ways that polyurethanes can be improved.
-      12/5        Develop experimental plan.
-
-      Week of     Create visual aids, depicting chemical reactions and experimental setups.
-      12/12       Prepare draft of analytical report.
-
-      Week of     Turn in copy of preliminary analytical report, to be expanded upon next semester.
-      12/18
-
-
-
-
-
- Complex Table
-
- The following sample table is excerpted from a student's senior thesis about tests conducted on
- Pennsylvania coal. Note the specificity of the table’s caption. Also note the level of discussion following the
- table, and how the writer uses the data from the table to move toward an explanation of the trends that
- the table reveals.
-```
+[📎 See full extracted text here](./examples/output.txt)
