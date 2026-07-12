@@ -43,40 +43,54 @@ def _robust_char_width(words: List[Word]) -> float:
     return float(median(vals)) if vals else 0.005
 
 
-def _group_words_into_lines(words: List[Word], y_tol: Optional[float] = None) -> List[_Line]:
-    """Cluster words into lines by y-center proximity (single sweep)."""
+_MIN_OVERLAP_RATIO = 0.4
+
+
+def _vertical_overlap_ratio(top_a: float, bottom_a: float, top_b: float, bottom_b: float) -> float:
+    """
+    Overlap between two vertical spans, relative to the shorter one.
+    Ratio-based (not a fixed pixel/fraction tolerance), so it correctly
+    groups a small word (e.g. a "Print" label) onto the same line as a
+    much taller heading word it's vertically contained within, and
+    correctly separates lines regardless of font size.
+    """
+    overlap = max(0.0, min(bottom_a, bottom_b) - max(top_a, top_b))
+    shorter = min(bottom_a - top_a, bottom_b - top_b)
+    return overlap / shorter if shorter > 0 else 0.0
+
+
+def _group_words_into_lines(words: List[Word]) -> List[_Line]:
+    """
+    Cluster words into lines using vertical bbox overlap (single sweep,
+    sorted by top edge). A word joins the current line's band if it
+    overlaps that band by _MIN_OVERLAP_RATIO or more; this is invariant
+    to font size, unlike a fixed y-center distance tolerance, which
+    breaks when a line mixes a heading-sized word with small text.
+    """
     if not words:
         return []
 
-    words_sorted = sorted(words, key=lambda w: (w.y_center, w.x0))
-
-    if y_tol is None:
-        h_med = float(median([w.height for w in words_sorted]))
-        y_tol = max(1e-4, 0.55 * h_med)
+    words_sorted = sorted(words, key=lambda w: (w.y0, w.x0))
 
     lines: List[_Line] = []
     cur: List[Word] = []
     cur_top = cur_bottom = 0.0
-    cur_y: Optional[float] = None
 
     for w in words_sorted:
-        if cur_y is None:
+        if not cur:
             cur = [w]
             cur_top, cur_bottom = w.y0, w.y1
-            cur_y = w.y_center
             continue
 
-        if abs(w.y_center - cur_y) <= y_tol:
+        if _vertical_overlap_ratio(cur_top, cur_bottom, w.y0, w.y1) >= _MIN_OVERLAP_RATIO:
             cur.append(w)
             cur_top = min(cur_top, w.y0)
             cur_bottom = max(cur_bottom, w.y1)
-            cur_y = (cur_y * 0.85) + (w.y_center * 0.15)  # track drift smoothly
         else:
             cur.sort(key=lambda ww: ww.x0)
             lines.append(_Line(words=cur, top=cur_top, bottom=cur_bottom))
             cur = [w]
             cur_top, cur_bottom = w.y0, w.y1
-            cur_y = w.y_center
 
     if cur:
         cur.sort(key=lambda ww: ww.x0)
@@ -123,7 +137,7 @@ def render_page(words: List[Word], gap_policy: str = "capped") -> str:
     if not words:
         return ""
 
-    char_w = _robust_char_width(words)
+    global_char_w = _robust_char_width(words)
     lines = _group_words_into_lines(words)
     line_h = float(median([ln.height for ln in lines])) if lines else 0.01
 
@@ -137,6 +151,12 @@ def render_page(words: List[Word], gap_policy: str = "capped") -> str:
         else:
             n_new = _gap_to_newlines(ln.top - prev_bottom, line_h, gap_policy)
             prefix = "\n" * n_new
+
+        # Column width is computed per line (falling back to the page-wide
+        # median when a line has too few words to estimate reliably), so
+        # a heading's own font size — not the page's dominant body-text
+        # size — governs its spacing.
+        char_w = _robust_char_width(ln.words) if len(ln.words) >= 2 else global_char_w
 
         # Paint words onto the line, recording spans as they are pasted.
         out = ""
