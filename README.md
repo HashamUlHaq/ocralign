@@ -2,7 +2,18 @@
 
 `ocralign` extracts layout-preserving text from PDFs and images **plus a word-level coordinate mapping**, so any character span in the extracted text (e.g. an NER entity) can be resolved back to bounding boxes on the original page — for drawing highlight overlays in a PDF viewer, PIL/cv2, or anything else.
 
-The core is engine-agnostic: OCR engines plug in as adapters that emit one canonical schema, and all layout/locate logic runs on that schema. Tesseract (scanned PDFs/images) and PyMuPDF (born-digital PDFs) adapters are built in.
+The core is engine-agnostic: backends emit one canonical schema, and all locate/overlay logic runs on that schema. Two backends are built in:
+
+| | `backend="vanilla"` (default) | `backend="docling"` |
+|---|---|---|
+| Engine | Tesseract (scans) / PyMuPDF text layer (digital) | Docling layout models + Tesseract or RapidOCR |
+| Output text | Visually formatted monospace grid (mirrors the page) | Structural markdown (headings, pipe tables, reading-order paragraphs) |
+| Multi-column pages | Interleaves columns | Correct reading order |
+| Tables | Flattened by (x,y) proximity | Recognized structure, rendered as pipe tables |
+| Cost (CPU) | ~1–2 s/page | ~25–35 s/page (2-core CPU; GPU supported via `device="cuda"`) |
+| Install | Base package | `pip install "ocralign[docling]"` (~1 GB+ with models) |
+
+Both emit identical `Word`/`Page`/`Document` data, so `locate()` and overlays work the same regardless of backend. Use vanilla for simple single-column documents; switch to docling when a document has tables or multi-column layout and the text feeds an LLM/NER.
 
 ---
 
@@ -14,14 +25,17 @@ sudo apt install -y tesseract-ocr
 ```
 
 ## Installation
-```pip install ocralign```
+```bash
+pip install ocralign             # vanilla backend only
+pip install "ocralign[docling]"  # + docling backend (layout/table models, rapidocr)
+```
 
 ## Usage
 
 ```python
 from ocralign import process_pdf, process_image, locate, locate_substring, to_pixels
 
-# Process a PDF -> Document (pages with formatted text + word mapping)
+# Vanilla backend (default): visually formatted text
 doc = process_pdf(
     "./scan.pdf",
     type="image",        # "image" for scanned PDFs (OCR), "digital" for PDFs with a text layer
@@ -36,7 +50,21 @@ print(page.words[0])             # Word(text='Sample', bbox=(0.014, 0.02, ...), 
 
 # OCR a single image -> Page
 page = process_image("./sample.png")
+
+# Docling backend: structural markdown for complex layouts.
+# Detects born-digital vs scanned automatically (no `type` parameter).
+doc = process_pdf(
+    "./two_column_with_tables.pdf",
+    backend="docling",
+    ocr_engine="tesseract",  # or "rapidocr" (PP-OCR on ONNX Runtime)
+    device="cpu",            # "cuda" to run the models on GPU
+)
+print(doc.pages[0].text)     # "## Heading\n\nParagraph...\n\n| cell | cell |..."
 ```
+
+> **Docling + DPI note:** Docling's OCR stage re-renders regions at 3× scale internally.
+> Feed it ~100–150 DPI page images, not 300 DPI — higher input DPI roughly doubles OCR
+> time for no accuracy gain.
 
 ### Coordinate mapping & overlays
 
@@ -70,7 +98,7 @@ full_text = doc.text(add_marker=True)   # concatenated text with page markers
 
 ## Adding a new OCR engine
 
-Write one adapter function that converts the engine's native output into `List[Word]` (normalized bboxes) — see `ocralign/adapters/tesseract.py` (~60 lines). Layout rendering, offset mapping and `locate()` work unchanged on top of it. Commercial APIs (Textract, Document AI, Azure) already return word+bbox+confidence, so their adapters are thin translations.
+Write one adapter that converts the engine's native output into `List[Word]` (normalized bboxes) — see `ocralign/backends/vanilla/tesseract.py` (~60 lines) or, for a full layout-aware pipeline, `ocralign/backends/docling/`. Layout rendering, offset mapping and `locate()` work unchanged on top of it. Commercial APIs (Textract, Document AI, Azure) already return word+bbox+confidence, so their adapters are thin translations.
 
 ## Schema
 
