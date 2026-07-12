@@ -145,6 +145,12 @@ def process_pdf(
                  PDF via page ranges; results merge into one Document.
                  Requires device="cpu" — on GPU, workers would contend
                  for the same device; keep workers=1 there.
+                 IMPORTANT: workers > 1 starts processes via "spawn",
+                 which re-imports the calling script — the caller MUST
+                 invoke this from under `if __name__ == "__main__":`
+                 (standard multiprocessing requirement), otherwise the
+                 pool dies with "A process in the process pool was
+                 terminated abruptly".
 
     Returns:
         Document. page.text is markdown (headings, pipe tables,

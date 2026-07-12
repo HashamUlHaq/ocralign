@@ -69,6 +69,11 @@ model copies, ~1-1.5 GB RSS; defaults `num_threads` to `cpu_count() // workers`)
 Worth it for multi-page documents on multi-core machines; on GPU keep `workers=1`
 and let the device do the batching.
 
+> ⚠️ `workers > 1` starts processes via `spawn`, which re-imports your script:
+> the `process_pdf` call must live under `if __name__ == "__main__":` (or inside
+> a function only called from there), or the pool crashes with
+> `BrokenProcessPool`. Standard Python multiprocessing rule, but easy to trip on.
+
 > **Docling + DPI note:** Docling's OCR stage re-renders regions at 3× scale internally.
 > Feed it ~100–150 DPI page images, not 300 DPI — higher input DPI roughly doubles OCR
 > time for no accuracy gain.
