@@ -56,11 +56,18 @@ page = process_image("./sample.png")
 doc = process_pdf(
     "./two_column_with_tables.pdf",
     backend="docling",
-    ocr_engine="tesseract",  # or "rapidocr" (PP-OCR on ONNX Runtime)
-    device="cpu",            # "cuda" to run the models on GPU
+    ocr_engine="rapidocr",   # or "tesseract" (rapidocr is the engine with a GPU path)
+    device="cpu",            # "cuda" to run OCR + layout models on GPU
+    workers=4,               # CPU page-parallelism: N processes, pages merged in order
+    num_threads=4,           # per-process thread cap (torch + ONNX Runtime)
 )
 print(doc.pages[0].text)     # "## Heading\n\nParagraph...\n\n| cell | cell |..."
 ```
+
+**Scaling on CPU**: `workers=N` converts pages in N processes (each loads its own
+model copies, ~1-1.5 GB RSS; defaults `num_threads` to `cpu_count() // workers`).
+Worth it for multi-page documents on multi-core machines; on GPU keep `workers=1`
+and let the device do the batching.
 
 > **Docling + DPI note:** Docling's OCR stage re-renders regions at 3× scale internally.
 > Feed it ~100–150 DPI page images, not 300 DPI — higher input DPI roughly doubles OCR

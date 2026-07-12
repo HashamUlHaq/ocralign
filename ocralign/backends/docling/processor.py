@@ -50,6 +50,7 @@ def _build_converter(
     tables: bool,
     lang: Optional[List[str]],
     force_ocr: bool,
+    num_threads: Optional[int] = None,
 ):
     from docling.datamodel.accelerator_options import AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
@@ -70,7 +71,13 @@ def _build_converter(
     po.do_ocr = True
     po.do_table_structure = tables
     po.generate_parsed_pages = True  # the adapter needs the word cells
-    po.accelerator_options = AcceleratorOptions(device=device)
+    # num_threads governs BOTH the torch models (layout/tableformer) and
+    # the OCR engine's ONNX Runtime intra-op pool — docling propagates
+    # AcceleratorOptions.num_threads to each. Docling's default is 4.
+    if num_threads is not None:
+        po.accelerator_options = AcceleratorOptions(device=device, num_threads=num_threads)
+    else:
+        po.accelerator_options = AcceleratorOptions(device=device)
     if tables:
         po.table_structure_options.do_cell_matching = True
 
@@ -107,6 +114,8 @@ def process_pdf(
     tables: bool = True,
     lang: Optional[List[str]] = None,
     force_ocr: bool = False,
+    num_threads: Optional[int] = None,
+    workers: int = 1,
 ) -> Document:
     """
     Process a PDF (scanned or born-digital) into a Document with
@@ -126,6 +135,16 @@ def process_pdf(
         lang: OCR language codes in the chosen engine's convention
               (default: English).
         force_ocr: Force full-page OCR even when a text layer exists.
+        num_threads: Thread cap for the layout/table models (torch) and
+                     the OCR engine's ONNX Runtime sessions. None keeps
+                     docling's default of 4. With workers > 1 and no
+                     explicit value, defaults to cpu_count() // workers.
+        workers: Number of worker processes for page-level parallelism
+                 (CPU strategy). Each worker loads its own model copies
+                 (~1-1.5 GB RSS each) and converts pages of the shared
+                 PDF via page ranges; results merge into one Document.
+                 Requires device="cpu" — on GPU, workers would contend
+                 for the same device; keep workers=1 there.
 
     Returns:
         Document. page.text is markdown (headings, pipe tables,
@@ -133,8 +152,36 @@ def process_pdf(
         character spans back to page coordinates as with any backend.
     """
     _validate(ocr_engine, device)
-    logger.info(f"Docling backend processing: {pdf_path} (ocr={ocr_engine}, device={device})")
-    converter = _build_converter(ocr_engine, device, tables, lang, force_ocr)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    if workers > 1 and device != "cpu":
+        raise ValueError(
+            'workers > 1 is a CPU parallelism strategy and requires device="cpu"; '
+            "on GPU keep workers=1 (processes would contend for the same device)."
+        )
+
+    logger.info(
+        f"Docling backend processing: {pdf_path} "
+        f"(ocr={ocr_engine}, device={device}, workers={workers})"
+    )
+
+    if workers > 1:
+        from ocralign.backends.docling.parallel import process_pdf_parallel
+
+        if num_threads is None:
+            import os
+            num_threads = max(1, (os.cpu_count() or workers) // workers)
+        converter_config = dict(
+            ocr_engine=ocr_engine,
+            device=device,
+            tables=tables,
+            lang=lang,
+            force_ocr=force_ocr,
+            num_threads=num_threads,
+        )
+        return process_pdf_parallel(pdf_path, workers, converter_config)
+
+    converter = _build_converter(ocr_engine, device, tables, lang, force_ocr, num_threads)
     result = converter.convert(pdf_path)
     return convert_result(result)
 
@@ -145,6 +192,7 @@ def process_image(
     device: str = "cpu",
     tables: bool = True,
     lang: Optional[List[str]] = None,
+    num_threads: Optional[int] = None,
 ) -> Page:
     """
     Process a single page image into a Page with structural markdown
@@ -154,10 +202,12 @@ def process_image(
         page_image: Path to an image file, or a PIL Image (written to a
                     temporary file for Docling, which converts by path).
         Other args: as in process_pdf. force_ocr is implied — an image
-        has no text layer.
+        has no text layer. No workers param: a single page has nothing
+        to parallelize over.
     """
     _validate(ocr_engine, device)
-    converter = _build_converter(ocr_engine, device, tables, lang, force_ocr=False)
+    converter = _build_converter(ocr_engine, device, tables, lang, force_ocr=False,
+                                 num_threads=num_threads)
 
     if isinstance(page_image, (str, Path)):
         result = converter.convert(str(page_image))
