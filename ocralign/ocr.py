@@ -1,167 +1,84 @@
-import logging
-from typing import List, Optional
+"""
+Entry points: process_pdf / process_image with a selectable backend.
 
-import fitz  # PyMuPDF
-from PIL import Image
-from tqdm import tqdm
+Backends
+--------
+"vanilla" (default)
+    Tesseract OCR (scanned pages) or the PDF text layer (born-digital),
+    rendered as visually formatted monospace text that mirrors the page
+    layout. Fast, light dependencies. No understanding of columns or
+    tables — multi-column pages interleave and table rows flatten.
 
-from ocralign.tess_align import process_page
-from ocralign.tess_align_normalized import process_page as process_page_normalized
-from ocralign.digital_pdf_align import page_to_layout_text
+"docling"
+    Docling layout analysis (layout-detection + reading-order +
+    table-structure models) on top of a selectable OCR engine
+    ("tesseract" or "rapidocr", CPU or GPU). Produces structural
+    markdown text (headings, pipe tables, reading-order-correct
+    paragraphs) meant for LLM/NER consumption rather than visual
+    fidelity. Requires the optional docling dependencies:
+    pip install "ocralign[docling]"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-)
-logger = logging.getLogger(__name__)
+Both backends emit the same Document/Page/Word schema with word-level
+normalized bounding boxes and char offsets into the page text, so
+locate() / overlay resolution works identically regardless of backend.
+"""
 
-def _add_marker(text_pages: List[str]) -> List[str]:
-    return [ f"-- Page {pg_no + 1} --\n{img_text}"+ "\n\n" for pg_no, img_text in enumerate(text_pages)]
-        
-def write_to_txt(output_path: str, text_pages: List[str]) -> None:
+from typing import Any
 
-    full_doc_text = "".join(text_pages)
+from ocralign.backends import vanilla
+from ocralign.core.schema import Document, Page
 
-    with open(output_path, "w") as f_:
-        f_.write(full_doc_text)
-
-    logger.info(f"Output written to file {output_path}.")
+_BACKENDS = ("vanilla", "docling")
 
 
-def _page_to_pil_image(page: "fitz.Page", dpi: int) -> Image.Image:
-    """
-    Render a single PyMuPDF page to a PIL.Image at the requested DPI.
-    """
-    # PDF user space is 72 DPI; scale matrix accordingly.
-    zoom = dpi / 72.0
-    mat = fitz.Matrix(zoom, zoom)
-    pix = page.get_pixmap(matrix=mat, alpha=False)
-
-    mode = "RGBA" if pix.alpha else "RGB"
-    img = Image.frombytes(mode, (pix.width, pix.height), pix.samples)
-    return img
-
-def process_image_pdf(
-    pdf_path: str,
-    layout: str = "normalized",
-    add_marker: bool=True,
-    dpi: int = 300,
-    output_path: Optional[str] = None,
-) -> Optional[List[str]]:
-
-    doc = None
+def _docling_backend():
     try:
-        logger.info(f"Starting PDF processing for: {pdf_path}")
-        doc = fitz.open(pdf_path)
-        page_count = doc.page_count
-        logger.info(f"Opened PDF with {page_count} page(s)")
+        from ocralign.backends import docling as docling_backend
+    except ImportError as e:
+        raise ImportError(
+            "The docling backend requires optional dependencies. "
+            "Install them with: pip install 'ocralign[docling]'"
+        ) from e
+    return docling_backend
 
-        text_pages: List[str] = []
 
-        # Iterate pages one-by-one to keep memory footprint low
-        for page_index in tqdm(range(page_count), desc="Processing Pages"):
-            logger.debug(f"Processing page {page_index + 1}")
-            page = doc.load_page(page_index)
-            image = _page_to_pil_image(page, dpi=dpi)
-            if layout == "normalized":
-                text = "\n" + process_page_normalized(image)
-            elif layout == "absolute":
-                text = process_page(image)
-            else:
-                raise ValueError(f"Invalid layout: {layout}. Valid layouts for image PDFs are: normalized, absolute")
-            text_pages.append(text)
-            logger.debug(f"Extracted text from page {page_index + 1}")
-
-        if add_marker:
-            text_pages = _add_marker(text_pages)
-
-        if output_path:
-            write_to_txt(output_path, text_pages)
-            return None
-        else:
-            return text_pages
-
-    except Exception as e:
-        logger.error(f"Failed to process PDF: {e}", exc_info=True)
-        raise
-    finally:
-        if doc is not None:
-            doc.close()
-
-def process_digital_pdf(pdf_path: str, layout: str, add_marker: bool, output_path: Optional[str] = None) -> Optional[List[str]]:
-    doc = None
-    try:
-        logger.info(f"Starting PDF processing for: {pdf_path}")
-        doc = fitz.open(pdf_path)
-        page_count = doc.page_count
-        logger.info(f"Opened PDF with {page_count} page(s)")
-        
-        text_pages: List[str] = []
-        for i in range(doc.page_count):
-            page = doc.load_page(i)
-            if layout in ['normalized', 'absolute']: 
-                text_pages.append(page_to_layout_text(page, cols=140))
-            else:
-                text_pages.append(page.get_text())
-
-        if add_marker:
-            text_pages = _add_marker(text_pages)
-
-        if output_path:
-            write_to_txt(output_path, text_pages)
-            return None
-        else:
-            return text_pages
-
-    except Exception as e:
-        logger.error(f"Failed to process PDF: {e}", exc_info=True)
-        raise
-    finally:
-        if doc is not None:
-            doc.close()
-
-def process_pdf(
-    pdf_path: str,
-    type: str="image",
-    layout: str = "normalized",
-    add_marker: bool = True,
-    dpi: int = 300,
-    output_path: Optional[str] = None,
-) -> Optional[List[str]]:
+def process_pdf(pdf_path: str, backend: str = "vanilla", **kwargs: Any) -> Document:
     """
-    Process a PDF file by converting each page to an image and extracting text using OCR.
-
-    Uses PyMuPDF (fitz) instead of pdf2image for significantly lower memory usage
-    and better performance on large files.
+    Process a PDF into a Document with per-page text and word-level
+    coordinate mapping.
 
     Args:
-        pdf_path (str): Path to the input PDF file.
-        type (str): "image" for scanned or "digital" for pdfs with retrievable text.
-        layout (str): "normalized" for normalized layout, "absolute" to get the absolute layout, "none" to get the raw text.
-        add_marker (bool): Add page boundary in the output
-        dpi (int): Dots per inch for image rendering. Higher DPI gives better OCR results.
-        output_path (str, optional): If provided, writes concatenated text to this file
-                                     instead of returning the list of page texts.
+        pdf_path: Path to the input PDF file.
+        backend: "vanilla" or "docling" (see module docstring).
+        **kwargs: Backend-specific options.
+            vanilla: type="image"|"digital", layout="normalized"|"absolute"|"none", dpi=300
+            docling: ocr_engine="tesseract"|"rapidocr", device="cpu"|"cuda"|"auto",
+                     tables=True, lang=None, force_ocr=False
 
     Returns:
-        Optional[List[str]]: A list of strings where each string contains the OCR-extracted
-                             text from one page. Returns None if output_path is provided.
+        Document. Use doc.pages[i].text for the page text, and
+        ocralign.locate() to resolve character spans back to page
+        coordinates for overlays.
     """
-    if layout not in ["normalized", "absolute", "none"]:
-        raise ValueError("Invalid layout. Valid layouts are: normalized, absolute, none")
-    
-    if type == "image":
-        return process_image_pdf(pdf_path, layout, add_marker, dpi, output_path)
-    elif type == "digital":
-        return process_digital_pdf(pdf_path, layout, add_marker, output_path)
-    else:
-        raise Exception ('Invalid document type. Only "digital" or "image" is allowed')
+    if backend not in _BACKENDS:
+        raise ValueError(f"Invalid backend: {backend!r}. Valid backends: {', '.join(_BACKENDS)}")
+    if backend == "docling":
+        return _docling_backend().process_pdf(pdf_path, **kwargs)
+    return vanilla.process_pdf(pdf_path, **kwargs)
 
-def process_image(image_path: str) -> str:
-    """
-    Process a single image file with OCR.
 
-    This keeps the existing behavior intact; if `process_page` already
-    accepts a path, this remains a thin passthrough.
+def process_image(page_image: Any, backend: str = "vanilla", **kwargs: Any) -> Page:
     """
-    return process_page(image_path)
+    Process a single page image into a Page with text and word-level
+    coordinate mapping.
+
+    Args:
+        page_image: PIL Image or path to an image file.
+        backend: "vanilla" or "docling" (see module docstring).
+        **kwargs: Backend-specific options (see process_pdf).
+    """
+    if backend not in _BACKENDS:
+        raise ValueError(f"Invalid backend: {backend!r}. Valid backends: {', '.join(_BACKENDS)}")
+    if backend == "docling":
+        return _docling_backend().process_image(page_image, **kwargs)
+    return vanilla.process_image(page_image, **kwargs)
