@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ocralign"
-version = "0.3.0"
+version = "0.2.0"
 description = "OCR while preserving document formatting and layout, with word-level coordinate mapping for overlays"
 authors = [{ name = "Hasham Ul Haq", email = "haashaamulhaq@gmail.com" }]
 readme = "README.md"

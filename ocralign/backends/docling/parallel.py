@@ -64,10 +64,13 @@ def process_pdf_parallel(
     vary a lot in cost — a page with tables is several times a plain
     one — so single-page tasks give the best load balance).
     """
-    import fitz
+    # pypdfium2, not PyMuPDF: it's already a docling dependency (docling
+    # uses it internally for rendering), so this adds no new dependency
+    # and can't disagree with docling about how many pages the file has.
+    import pypdfium2 as pdfium
 
-    with fitz.open(pdf_path) as pdf:
-        n_pages = pdf.page_count
+    with pdfium.PdfDocument(pdf_path) as pdf:
+        n_pages = len(pdf)
     if n_pages == 0:
         return Document(pages=[])
 
