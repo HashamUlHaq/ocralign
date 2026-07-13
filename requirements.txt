@@ -20,6 +20,10 @@ tqdm==4.68.4
 docling==2.112.0
 rapidocr==3.9.1
 
-# ONNX Runtime: exactly ONE of the two, never both.
-onnxruntime-gpu==1.27.0          # GPU (CUDA) — for device="cuda"
-# onnxruntime==1.27.0            # CPU-only alternative
+# ONNX Runtime: exactly ONE of the following, never two.
+# NOTE: onnxruntime-gpu 1.27+ is CUDA 13 ONLY (links libcudart.so.13 and
+# fails to import at all — even for CPU runs — on CUDA 12 machines).
+# Check `nvidia-smi` for the driver's CUDA version and pick accordingly.
+onnxruntime-gpu<1.27             # GPU, CUDA 12.x (resolves to 1.26.x)
+# onnxruntime-gpu==1.27.0        # GPU, CUDA 13.x only
+# onnxruntime==1.27.0            # CPU-only machines
