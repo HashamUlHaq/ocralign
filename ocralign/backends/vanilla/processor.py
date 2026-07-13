@@ -15,10 +15,9 @@ from ocralign.backends.vanilla import tesseract as tesseract_adapter
 from ocralign.backends.vanilla.layout import render_page
 from ocralign.core.schema import Document, Page, Word
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(message)s",
-)
+# No logging.basicConfig here: libraries must not configure the root
+# logger (it force-enables INFO output from every dependency). Messages
+# below surface only if the application configures logging itself.
 logger = logging.getLogger(__name__)
 
 _LAYOUT_TO_GAP_POLICY = {

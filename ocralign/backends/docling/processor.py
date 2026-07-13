@@ -24,7 +24,9 @@ for no accuracy gain (measured: 300 DPI input doubles OCR time).
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, List, Optional
@@ -33,6 +35,74 @@ from ocralign.backends.docling.adapter import convert_result
 from ocralign.core.schema import Document, Page
 
 logger = logging.getLogger(__name__)
+
+# Docling and its OCR engines log per-conversion progress at INFO
+# ("Going to convert document batch...", "Finished converting..."),
+# which floods the console when the parallel path runs one convert()
+# per page. Cap them at WARNING; set OCRALIGN_VERBOSE=1 to keep them.
+_NOISY_LOGGERS = ("docling", "docling_ibm_models", "docling_core", "RapidOCR")
+
+
+def _min_warning_filter(record: logging.LogRecord) -> bool:
+    return record.levelno >= logging.WARNING
+
+
+@contextlib.contextmanager
+def _mute_native_stderr():
+    """
+    Temporarily silence writes to the stderr file descriptor. Needed for
+    C++-side messages that bypass Python's sys.stderr entirely.
+    """
+    import sys
+
+    try:
+        fd = sys.stderr.fileno()
+    except Exception:
+        yield
+        return
+    saved = os.dup(fd)
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        sys.stderr.flush()
+        os.dup2(devnull, fd)
+        os.close(devnull)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, fd)
+        os.close(saved)
+
+
+def _quiet_dependency_logs() -> None:
+    if os.getenv("OCRALIGN_VERBOSE"):
+        return
+    # A filter, not just setLevel: rapidocr's Logger class calls
+    # setLevel(INFO) on its logger every time one of its modules
+    # instantiates it (i.e. repeatedly, during engine construction),
+    # which would overwrite any level we set here. Filters on the named
+    # logger persist across those calls.
+    for name in _NOISY_LOGGERS:
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.WARNING)
+        if _min_warning_filter not in lg.filters:
+            lg.addFilter(_min_warning_filter)
+    # The "Loading weights" bar printed while docling loads its layout
+    # model comes from transformers/huggingface_hub; this env var is
+    # their documented off switch (read at import, so set it early).
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    # onnxruntime emits C++-side warnings (e.g. GPU device-discovery
+    # probes on CPU-only machines) straight to the stderr fd, bypassing
+    # Python logging. The probe runs while the ORT environment is being
+    # created — i.e. during this very import/call — so the fd must be
+    # muted around it; the severity floor then covers everything later.
+    try:
+        with _mute_native_stderr():
+            import onnxruntime
+
+            onnxruntime.set_default_logger_severity(3)
+    except Exception:
+        pass
+
 
 _OCR_ENGINES = ("tesseract", "rapidocr")
 _DEVICES = ("cpu", "cuda", "mps", "auto")
@@ -52,6 +122,12 @@ def _build_converter(
     force_ocr: bool,
     num_threads: Optional[int] = None,
 ):
+    # Quiet BEFORE importing docling: huggingface_hub/transformers read
+    # the progress-bar env var at import time. Applies in the parent and
+    # in each spawned worker — every code path that talks to docling
+    # builds its converter through here.
+    _quiet_dependency_logs()
+
     from docling.datamodel.accelerator_options import AcceleratorOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import (

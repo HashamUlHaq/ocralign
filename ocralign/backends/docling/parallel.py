@@ -20,8 +20,10 @@ holds its own model copies, ~1-1.5 GB RSS.
 from __future__ import annotations
 
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple
+
+from tqdm import tqdm
 
 from ocralign.core.schema import Document, Page
 
@@ -31,8 +33,12 @@ _CONVERTER = None
 
 def _init_worker(converter_config: Dict) -> None:
     global _CONVERTER
-    from ocralign.backends.docling.processor import _build_converter
+    # Quiet dependency logging FIRST — before docling/onnxruntime are
+    # imported and initialized — so the ORT native-severity floor is in
+    # place before its environment (and its GPU-probe warnings) exists.
+    from ocralign.backends.docling.processor import _build_converter, _quiet_dependency_logs
 
+    _quiet_dependency_logs()
     _CONVERTER = _build_converter(**converter_config)
 
 
@@ -65,14 +71,18 @@ def process_pdf_parallel(
     tasks = [(pdf_path, page_no, page_no) for page_no in range(1, n_pages + 1)]
 
     ctx = multiprocessing.get_context("spawn")
+    pages: List[Page] = []
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=ctx,
         initializer=_init_worker,
         initargs=(converter_config,),
     ) as executor:
-        page_lists = list(executor.map(_convert_range, tasks))
+        futures = [executor.submit(_convert_range, t) for t in tasks]
+        with tqdm(total=n_pages, desc="Processing Pages") as bar:
+            for future in as_completed(futures):
+                pages.extend(future.result())
+                bar.update(1)
 
-    pages = [p for page_list in page_lists for p in page_list]
     pages.sort(key=lambda p: p.page_number)
     return Document(pages=pages)
