@@ -263,9 +263,24 @@ def process_pdf(
         )
         return process_pdf_parallel(pdf_path, workers, converter_config)
 
+    import sys
+    import time
+
+    t0 = time.perf_counter()
     converter = _build_converter(ocr_engine, device, tables, lang, force_ocr, num_threads)
+    t_load = time.perf_counter() - t0
+    t1 = time.perf_counter()
     result = converter.convert(pdf_path)
-    return convert_result(result)
+    doc = convert_result(result)
+    t_convert = time.perf_counter() - t1
+
+    n = max(1, len(doc.pages))
+    print(
+        f"{len(doc.pages)} pages in {t_convert:.1f}s "
+        f"({t_convert / n:.2f}s/page, +{t_load:.1f}s model load)",
+        file=sys.stderr,
+    )
+    return doc
 
 
 def process_image(
