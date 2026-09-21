@@ -1,0 +1,64 @@
+# PaddleOCR-VL *client* image — the full doc_parser pipeline, GPU.
+#
+# The upstream genai-vllm-server image is serving-only: it ships vLLM and
+# paddlex 3.6.1, but NOT the paddlex[ocr] extras and NOT paddlepaddle itself,
+# so `paddleocr doc_parser` dies with DependencyError.
+#
+# Layering on the server image keeps paddlex/paddleocr versions identical to
+# what the server runs and reuses its ~12.5 GB of layers.
+#
+# ---------------------------------------------------------------------------
+# WHY --no-deps ON paddlepaddle-gpu  (do not "fix" this by removing it)
+# ---------------------------------------------------------------------------
+# A plain `pip install paddlepaddle-gpu` from the cu126 index DOWNGRADES the
+# shared nvidia-* CUDA wheels 12.8 -> 12.6. That breaks torch 2.8.0, which pins
+# them exactly, and the failure is not subtle:
+#
+#   ImportError: libtorch_cuda.so: undefined symbol: ncclCommWindowRegister
+#   (nvidia-nccl-cu12 2.27.3 -> 2.25.1)
+#
+# and `from paddleocr import PaddleOCRVL` DOES import torch, so the whole
+# pipeline dies.
+#
+# paddlepaddle-gpu declares its nvidia-* requirements UNPINNED (bare names, no
+# ==), so it is satisfied by the 12.8 wheels torch already ships. Installing it
+# with --no-deps therefore leaves CUDA 12.8 in place: torch keeps working and
+# paddle runs cu126 code against the 12.8 runtime via CUDA minor-version
+# compatibility. This also avoids re-downloading ~3 GB of CUDA wheels.
+#
+# Of paddle's non-CUDA deps (httpx, networkx, numpy, opt_einsum, Pillow,
+# protobuf, safetensors, typing_extensions) only opt_einsum is absent from the
+# base image, so it is the sole thing --no-deps requires us to add by hand.
+# If you bump the paddlepaddle version, re-check that list.
+#
+# cu126 is deliberate: minor-version compatibility means it runs on the host's
+# 12.8 driver (570.211.01). cu128 publishes no builds; cu129 wants a newer
+# driver than we have.
+#
+# NOTE: do NOT add a build-time `import paddle` check. libcuda.so.1 is injected
+# by the nvidia container runtime at `docker run`, not during `docker build`,
+# so a GPU paddle import always fails at build time. Verify at runtime.
+
+FROM ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-vllm-server:latest-nvidia-gpu
+
+USER root
+
+RUN pip install --no-cache-dir "paddlex[ocr]==3.6.1"
+
+RUN pip install --no-cache-dir opt_einsum \
+ && pip install --no-cache-dir --no-deps \
+      --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+      paddlepaddle-gpu==3.3.1
+
+# python-docx is NOT part of the paddlex[ocr] extra, but doc_parser's
+# `res.save_all()` unconditionally calls save_to_word() -> `from docx.enum.text
+# import WD_ALIGN_PARAGRAPH`. Without it the pipeline does all its work and then
+# dies at the final save, having written only the FIRST page. Every other
+# save-path dep (openpyxl, bs4, premailer, lxml, latex2mathml, pypdfium2, ...)
+# does come with [ocr]; docx was the only gap.
+# Keep this as the LAST layer so edits here don't re-download the 2 GB
+# paddlepaddle wheel above.
+RUN pip install --no-cache-dir python-docx
+
+USER paddleocr
+WORKDIR /home/paddleocr

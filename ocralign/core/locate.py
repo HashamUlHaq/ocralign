@@ -25,9 +25,21 @@ def locate(page: Page, char_start: int, char_end: int) -> List[BBox]:
     (e.g. from tokenizer boundary mismatches) still highlight the whole
     word. Returns one merged box per visual line (a span wrapping two
     lines yields two boxes). Empty list if nothing matches.
+
+    A page with no words but with blocks (the paddle backend records
+    geometry per layout region) resolves to the box of every block the
+    span overlaps, in reading order: region-level, not word-level,
+    precision.
     """
     if char_end <= char_start:
         return []
+
+    if not page.words and page.blocks:
+        return [
+            b.bbox for b in page.blocks
+            if b.bbox is not None and b.char_start is not None and b.char_end is not None
+            and b.char_start < char_end and b.char_end > char_start
+        ]
 
     hits = [
         w for w in page.words

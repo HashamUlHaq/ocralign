@@ -18,9 +18,18 @@ Backends
     fidelity. Requires the optional docling dependencies:
     pip install "ocralign[docling]"
 
-Both backends emit the same Document/Page/Word schema with word-level
-normalized bounding boxes and char offsets into the page text, so
-locate() / overlay resolution works identically regardless of backend.
+"paddle"
+    PaddleOCR-VL (layout detection + vision-language recognition) running
+    as a local GPU service (ocralign/backends/paddle/service/stack.sh).
+    Reads every page from pixels, so scans and born-digital PDFs behave
+    the same. Produces structural markdown for LLM consumption: reading
+    order, tagged page header/footer, headings, pipe tables. Needs only
+    the HTTP client locally: pip install "ocralign[paddle]"
+
+All backends emit the same Document/Page schema with normalized bounding
+boxes and char offsets into the page text. vanilla and docling record
+them per Word; paddle records them per layout Block, and locate() falls
+back to block boxes on pages that have no words.
 """
 
 from typing import Any
@@ -28,7 +37,7 @@ from typing import Any
 from ocralign.backends import vanilla
 from ocralign.core.schema import Document, Page
 
-_BACKENDS = ("vanilla", "docling")
+_BACKENDS = ("vanilla", "docling", "paddle")
 
 
 def _docling_backend():
@@ -42,6 +51,17 @@ def _docling_backend():
     return docling_backend
 
 
+def _paddle_backend():
+    try:
+        from ocralign.backends import paddle as paddle_backend
+    except ImportError as e:
+        raise ImportError(
+            "The paddle backend requires optional dependencies. "
+            "Install them with: pip install 'ocralign[paddle]'"
+        ) from e
+    return paddle_backend
+
+
 def process_pdf(pdf_path: str, backend: str = "vanilla", **kwargs: Any) -> Document:
     """
     Process a PDF into a Document with per-page text and word-level
@@ -49,11 +69,12 @@ def process_pdf(pdf_path: str, backend: str = "vanilla", **kwargs: Any) -> Docum
 
     Args:
         pdf_path: Path to the input PDF file.
-        backend: "vanilla" or "docling" (see module docstring).
+        backend: "vanilla", "docling" or "paddle" (see module docstring).
         **kwargs: Backend-specific options.
             vanilla: type="image"|"digital", layout="normalized"|"absolute"|"none", dpi=300
             docling: ocr_engine="tesseract"|"rapidocr", device="cpu"|"cuda"|"auto",
                      tables=True, lang=None, force_ocr=False
+            paddle:  url="http://127.0.0.1:8081", timeout=3600
 
     Returns:
         Document. Use doc.pages[i].text for the page text, and
@@ -64,6 +85,8 @@ def process_pdf(pdf_path: str, backend: str = "vanilla", **kwargs: Any) -> Docum
         raise ValueError(f"Invalid backend: {backend!r}. Valid backends: {', '.join(_BACKENDS)}")
     if backend == "docling":
         return _docling_backend().process_pdf(pdf_path, **kwargs)
+    if backend == "paddle":
+        return _paddle_backend().process_pdf(pdf_path, **kwargs)
     return vanilla.process_pdf(pdf_path, **kwargs)
 
 
@@ -74,11 +97,13 @@ def process_image(page_image: Any, backend: str = "vanilla", **kwargs: Any) -> P
 
     Args:
         page_image: PIL Image or path to an image file.
-        backend: "vanilla" or "docling" (see module docstring).
+        backend: "vanilla", "docling" or "paddle" (see module docstring).
         **kwargs: Backend-specific options (see process_pdf).
     """
     if backend not in _BACKENDS:
         raise ValueError(f"Invalid backend: {backend!r}. Valid backends: {', '.join(_BACKENDS)}")
     if backend == "docling":
         return _docling_backend().process_image(page_image, **kwargs)
+    if backend == "paddle":
+        return _paddle_backend().process_image(page_image, **kwargs)
     return vanilla.process_image(page_image, **kwargs)

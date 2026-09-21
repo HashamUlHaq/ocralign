@@ -26,6 +26,17 @@ docling = [
     "rapidocr",
     "onnxruntime",
 ]
+# PaddleOCR-VL backend: only the HTTP client. The engine runs as a GPU
+# service in Docker (ocralign/backends/paddle/service/), so paddle itself
+# is never installed here.
+paddle = [
+    "requests",
+]
 
 [tool.setuptools.packages.find]
 include = ["ocralign*"]
+
+# The paddle service (service.py, Dockerfile, vLLM config, stack.sh) ships
+# as data so every install starts the same checked-in stack.
+[tool.setuptools.package-data]
+"ocralign.backends.paddle" = ["service/*"]
