@@ -1,0 +1,34 @@
+# vLLM backend config for PaddleOCR-VL-1.6-0.9B
+#
+# Schema: a flat mapping of vLLM `serve` CLI flags WITHOUT the leading "--".
+# paddlex converts underscores to dashes automatically, so either
+# `gpu_memory_utilization` or `gpu-memory-utilization` works.
+# Booleans are emitted as bare flags. See:
+#   paddlex/inference/genai/configs/utils.py :: backend_config_to_args
+#
+# These keys OVERRIDE the model defaults in
+#   paddlex/inference/genai/configs/paddleocr_vl_09b.py :: get_config
+#
+# NOTE: `model`, `host`, and `port` are force-set from the CLI after this
+# file is loaded, so setting them here has no effect.
+#
+# Values below currently MIRROR the built-in defaults, so behaviour is
+# unchanged from a proven-good baseline. Tune from here.
+
+trust-remote-code: true
+
+# Fraction of the A10G's 23028 MiB that vLLM reserves up front.
+# 0.5 ~= 11.5 GB, leaving ~11.5 GB free for other GPU work.
+# Lower this (e.g. 0.25) to leave room for another model on the same GPU;
+# raise it toward 0.8 for more KV cache if PaddleOCR gets the GPU alone.
+gpu-memory-utilization: 0.5
+
+# Max context length per request.
+max-model-len: 16384
+
+# Token budget per batched forward pass.
+max-num-batched-tokens: 131072
+
+# Number of API server processes fronting the engine.
+# Uses shared memory - keep the container's --shm-size well above the default 64m.
+api-server-count: 4

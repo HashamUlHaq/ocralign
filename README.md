@@ -2,18 +2,19 @@
 
 `ocralign` extracts layout-preserving text from PDFs and images **plus a word-level coordinate mapping**, so any character span in the extracted text (e.g. an NER entity) can be resolved back to bounding boxes on the original page — for drawing highlight overlays in a PDF viewer, PIL/cv2, or anything else.
 
-The core is engine-agnostic: backends emit one canonical schema, and all locate/overlay logic runs on that schema. Two backends are built in:
+The core is engine-agnostic: backends emit one canonical schema, and all locate/overlay logic runs on that schema. Three backends are built in:
 
-| | `backend="vanilla"` (default) | `backend="docling"` |
-|---|---|---|
-| Engine | Tesseract (scans) / PyMuPDF text layer (digital) | Docling layout models + Tesseract or RapidOCR |
-| Output text | Visually formatted monospace grid (mirrors the page) | Structural markdown (headings, pipe tables, reading-order paragraphs) |
-| Multi-column pages | Interleaves columns | Correct reading order |
-| Tables | Flattened by (x,y) proximity | Recognized structure, rendered as pipe tables |
-| Cost (CPU) | ~1–2 s/page | ~25–35 s/page (2-core CPU; GPU supported via `device="cuda"`) |
-| Install | Base package | `pip install "ocralign[docling]"` (~1 GB+ with models) |
+| | `backend="vanilla"` (default) | `backend="docling"` | `backend="paddle"` |
+|---|---|---|---|
+| Engine | Tesseract (scans) / PyMuPDF text layer (digital) | Docling layout models + Tesseract or RapidOCR | PaddleOCR-VL-1.6-0.9B (layout detection + vision-language recognition), a local GPU service |
+| Output text | Visually formatted monospace grid (mirrors the page) | Structural markdown (headings, pipe tables, reading-order paragraphs) | Structural markdown + tagged `[page header]` / `[page footer]`, LaTeX symbols as Unicode |
+| Multi-column pages | Interleaves columns | Correct reading order | Correct reading order |
+| Tables | Flattened by (x,y) proximity | Recognized structure, rendered as pipe tables | Recognized structure, spans expanded, pipe tables |
+| Geometry | Word boxes | Word boxes | Layout-block boxes (`Page.blocks`) |
+| Cost | ~1–2 s/page (CPU) | ~25–35 s/page (2-core CPU; GPU supported via `device="cuda"`) | ~0.7–2.2 s/page on an A10G, rising with layout density |
+| Install | Base package | `pip install "ocralign[docling]"` (~1 GB+ with models) | `pip install "ocralign[paddle]"` + the Docker service (below) |
 
-Both emit identical `Word`/`Page`/`Document` data, so `locate()` and overlays work the same regardless of backend. Use vanilla for simple single-column documents; switch to docling when a document has tables or multi-column layout and the text feeds an LLM/NER.
+All three emit the same `Page`/`Document` data. vanilla and docling record a box per `Word`; paddle's recogniser reads whole regions, so it records a box per layout `Block` instead, and `locate()` resolves spans to those block boxes. Use vanilla for simple single-column documents; switch to docling or paddle when a document has tables or multi-column layout and the text feeds an LLM/NER.
 
 ---
 
@@ -28,6 +29,7 @@ sudo apt install -y tesseract-ocr
 ```bash
 pip install ocralign             # vanilla backend only
 pip install "ocralign[docling]"  # + docling backend (layout/table models, rapidocr)
+pip install "ocralign[paddle]"   # + paddle backend client (the engine runs as a Docker service)
 ```
 
 ## Usage
@@ -78,6 +80,48 @@ and let the device do the batching.
 > Feed it ~100–150 DPI page images, not 300 DPI — higher input DPI roughly doubles OCR
 > time for no accuracy gain.
 
+### Paddle backend
+
+PaddleOCR-VL reads every page from pixels, so scans and born-digital PDFs behave the same and
+a broken embedded text layer can't leak through. Nothing is dropped: page headers, footers and
+page numbers are kept (tagged), images become `[image]` placeholders, and quoted
+`-- Page N --` markers inside page text are neutralised.
+
+```python
+doc = process_pdf("./chart.pdf", backend="paddle")   # url="http://127.0.0.1:8081", timeout=3600
+page = doc.pages[0]
+print(page.text)        # "[page header] Clinic ...\n\n# Progress Note\n\n| Test | Result |\n|---|---|..."
+print(page.blocks[0])   # Block(label='header', text='[page header] Clinic ...',
+                        #       bbox=(0.05, 0.02, 0.61, 0.06), char_start=0, char_end=42)
+
+# OCR is minutes per long document, rendering is milliseconds: keep the raw payload and
+# re-render it after a renderer change instead of re-OCR'ing.
+from ocralign.backends.paddle import fetch_payload, payload_to_document
+payload = fetch_payload("./chart.pdf")       # JSON-serialisable
+doc = payload_to_document(payload)           # pure, no service needed
+```
+
+The engine runs in Docker (the package never imports paddle, whose CUDA wheels conflict with
+torch). Service code, Dockerfile, vLLM config and a start script ship inside the package
+(`ocralign/backends/paddle/service/`):
+
+```bash
+python -m ocralign.backends.paddle up       # vLLM recogniser on :8080 + layout service on :8081, waits until healthy
+python -m ocralign.backends.paddle status
+python -m ocralign.backends.paddle down     # frees the GPU
+```
+
+The service's client image is built locally, once; if it is missing, `up` prints the exact
+`docker build` command.
+
+- **GPU:** ~13 GB must be free to start (vLLM reserves half the card) and ~9.3 GB is held while
+  running. On a 22–24 GB card it can't run beside another large model: OCR first, keep the
+  payloads, then stop the stack.
+- **Privacy:** both services bind 127.0.0.1 only; only the file extension is sent in the request
+  URL (filenames can carry personal names); the service logs counts and timings, never text.
+- **Fail loud:** if the service is down, `PaddleOCRUnavailable` says how to start it. There is no
+  silent fallback to another engine.
+
 ### Coordinate mapping & overlays
 
 Bounding boxes are `(x0, y0, x1, y1)` as **fractions of page width/height (0–1, origin top-left)** — independent of OCR DPI and of whatever size the page is later rendered at.
@@ -85,6 +129,7 @@ Bounding boxes are `(x0, y0, x1, y1)` as **fractions of page width/height (0–1
 ```python
 # NER gives you a character span into page.text -> resolve to boxes.
 # One box per visual line; spans that wrap lines return multiple boxes.
+# (paddle pages: one box per layout block the span touches.)
 boxes = locate(page, char_start=120, char_end=134)
 
 # Or search by substring (whitespace-flexible; layout spacing won't break matching)
@@ -110,13 +155,13 @@ full_text = doc.text(add_marker=True)   # concatenated text with page markers
 
 ## Adding a new OCR engine
 
-Write one adapter that converts the engine's native output into `List[Word]` (normalized bboxes) — see `ocralign/backends/vanilla/tesseract.py` (~60 lines) or, for a full layout-aware pipeline, `ocralign/backends/docling/`. Layout rendering, offset mapping and `locate()` work unchanged on top of it. Commercial APIs (Textract, Document AI, Azure) already return word+bbox+confidence, so their adapters are thin translations.
+Write one adapter that converts the engine's native output into `List[Word]` (normalized bboxes) — see `ocralign/backends/vanilla/tesseract.py` (~60 lines) or, for a full layout-aware pipeline, `ocralign/backends/docling/`. Layout rendering, offset mapping and `locate()` work unchanged on top of it. Commercial APIs (Textract, Document AI, Azure) already return word+bbox+confidence, so their adapters are thin translations. An engine that only recognises whole regions emits `Page.blocks` instead (see `ocralign/backends/paddle/`).
 
 ## Schema
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "pages": [
     {
       "page_number": 1,
@@ -125,11 +170,17 @@ Write one adapter that converts the engine's native output into `List[Word]` (no
       "words": [
         {"text": "Margaret", "bbox": [0.12, 0.08, 0.22, 0.10],
          "confidence": 96.4, "line_no": 3, "char_start": 118, "char_end": 126}
-      ]
+      ],
+      "blocks": []
     }
   ]
 }
 ```
+
+`blocks` (added in 1.1) is filled by region-level engines (paddle), whose pages have no `words`:
+`{"label": "table", "text": "| a | b |\n|---|---|", "bbox": [0.1, 0.4, 0.9, 0.5], "char_start": 120, "char_end": 139}`,
+with `page.text[char_start:char_end] == text`. A region that adds no text (a logo) has `"text": ""`
+and null offsets. 1.0 documents load unchanged.
 
 ### Example input & overlay resolved via `locate_substring`:
 

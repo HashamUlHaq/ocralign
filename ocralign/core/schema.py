@@ -10,6 +10,9 @@ Conventions:
   in the range 0-1, origin at the top-left of the page.
 - char_start/char_end are offsets into the page's formatted `text` and are
   filled in by the layout renderer (None until a page has been rendered).
+- Geometry is per Word for engines that recognise words (vanilla,
+  docling) and per Block for engines that recognise whole layout regions
+  (paddle): those pages carry blocks and no words.
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-SCHEMA_VERSION = "1.0"
+# 1.1: Page.blocks added. Additive both ways — 1.0 readers ignore the key,
+# and 1.0 documents load with no blocks.
+SCHEMA_VERSION = "1.1"
 
 BBox = Tuple[float, float, float, float]  # (x0, y0, x1, y1), normalized 0-1
 
@@ -54,12 +59,31 @@ class Word:
 
 
 @dataclass
+class Block:
+    """
+    A layout region (paragraph, table, page header, ...) from an engine
+    that recognises whole regions rather than words.
+
+    text is the block's segment of Page.text, so
+    page.text[b.char_start:b.char_end] == b.text. A region that adds no
+    text (a logo, an empty cell) keeps its label and bbox, with text ""
+    and no char offsets.
+    """
+    label: str                          # engine layout class: "text", "table", "header", ...
+    text: str = ""
+    bbox: Optional[BBox] = None         # None if the engine gave no usable box
+    char_start: Optional[int] = None    # offset into Page.text
+    char_end: Optional[int] = None
+
+
+@dataclass
 class Page:
     page_number: int                    # 1-based
     words: List[Word] = field(default_factory=list)
     text: str = ""                      # formatted layout text, set by renderer
     width_px: Optional[int] = None      # source render size, informational
     height_px: Optional[int] = None
+    blocks: List[Block] = field(default_factory=list)  # region geometry; empty for word engines
 
 
 @dataclass
@@ -93,6 +117,16 @@ class Document:
                 )
                 for w in p.get("words", [])
             ]
+            blocks = [
+                Block(
+                    label=b["label"],
+                    text=b.get("text", ""),
+                    bbox=tuple(b["bbox"]) if b.get("bbox") is not None else None,
+                    char_start=b.get("char_start"),
+                    char_end=b.get("char_end"),
+                )
+                for b in p.get("blocks", [])
+            ]
             pages.append(
                 Page(
                     page_number=p["page_number"],
@@ -100,6 +134,7 @@ class Document:
                     text=p.get("text", ""),
                     width_px=p.get("width_px"),
                     height_px=p.get("height_px"),
+                    blocks=blocks,
                 )
             )
         return cls(pages=pages, schema_version=data.get("schema_version", SCHEMA_VERSION))
